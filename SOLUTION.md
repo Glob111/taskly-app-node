@@ -59,30 +59,34 @@ The agent's Bash access is limited to `npm --prefix backend|frontend test`, and 
 
 ## 4. Example run
 
-> **Status:** the tooling was verified locally (below). A live run against GitHub requires a secret and a pushed repository,
-> so the example PR run is for the reviewer/author to produce; paste the PR link here once done.
+**Live run:** https://github.com/Glob111/taskly-app-node/pull/1 ("Add todo statistics"), workflow run
+https://github.com/Glob111/taskly-app-node/actions/runs/45889188524 (all 19 steps succeeded in ~1.5 min).
 
-Verified locally, offline, without an API key:
+The PR adds a new feature **without tests**: backend `GET /todos/stats` (`computeStats`, registered before `/:id`) and a frontend
+`TodoStats` component + `summarizeTodos()` util wired into `TodosPage`.
 
-- Existing code coverage after adding tests (agent-independent, written during development):
-  backend 48 > **97 tests**, lines 33% > **100%**; frontend 47% > **97.4%** lines, 80 tests, `tsc` clean.
-- `post-agent.sh` simulation (also an automated test): the agent adds `backend/tests/new.test.ts`, edits `backend/src/a.ts` and
-  `.github/workflows/w.yml`, deletes `backend/tests/old.test.ts` > **1 allowed, 3 blocked and reverted**; the comment lists all four.
-- `mode` decisions: no key > `skip-no-secret`; fork head > `skip-fork`; same repo + key > `run`.
+What the agent did (taken from the PR comment it posted):
 
-Expected shape of the PR comment for the demo PR (e.g. a new `GET /todos/stats` endpoint plus a `TodoStats` component):
+| Step | Outcome |
+|---|---|
+| Mode | `run` (same-repo PR, credential present) |
+| Classify | backend + frontend source changes, `testsNeeded = true` |
+| Skills used | `analyze-pr-diff`, `write-backend-tests`, `write-frontend-tests`, `verify-tests` |
+| Decisions | created `backend/tests/stats.test.ts` (empty list, counts/priorities, overdue boundary with injected date); extended `router.test.ts` (`/stats` is served before `/:id`); created `TodoStats.test.tsx`; extended `utils/todos.test.ts` (fake timers) and `TodosPage.test.tsx` |
+| Path guard | 5 test files allowed, 0 blocked |
+| Independent test run | backend **101/101** (lines 100%), frontend **85/85** (lines 97.4%) |
+| Commit | green, so the bot pushed `test: add/update unit tests (test agent)` to the PR branch |
 
-```
-## Unit test agent report
-### Decisions
-- backend/src/features/todos/router.ts: update (new /stats route) > extended tests
-- frontend/src/features/todos/components/TodoStats.tsx: create > new colocated test
-### Skills used: analyze-pr-diff, write-backend-tests, write-frontend-tests, verify-tests
-### Files changed: backend/tests/router.test.ts, frontend/src/.../TodoStats.test.tsx
-### Test results: backend PASS x/x, frontend PASS y/y, coverage table
-```
+Also verified locally, offline, without any credential:
 
-(This block illustrates the format; real numbers come from the workflow run.)
+- Existing code: backend 48 > 97 tests (lines 33% > 100%); frontend 47% > 97.4% lines, 80 tests.
+- Agent tooling: 81 tests; `node .github/agent/cli.ts --dry-run` replays a mock agent that also tries to edit `backend/src/...` and
+  `.github/workflows/evil.yml`; both are blocked.
+- `post-agent.sh` (also an automated test): 1 new test allowed, source edit, workflow edit and a deletion all blocked and reverted.
+- `mode`: no credential > `skip-no-secret`; fork head > `skip-fork`; same repo + credential > `run`.
+
+Issue found during the live run and fixed: `pull_request` checks out the merge commit, so the agent's push also added a
+`Merge ... into ...` commit to the PR branch. The workflow now checks out the PR head SHA.
 
 ## 5. Assumptions
 
@@ -93,10 +97,9 @@ Expected shape of the PR comment for the demo PR (e.g. a new `GET /todos/stats` 
 
 ## 6. Limitations
 
-- **Not verified end-to-end on GitHub from this environment** (no secret, no remote): the LLM step, action inputs and push permissions
-  need a first live run. Everything around the LLM is tested locally.
+- Verified end-to-end on one demo PR only; model output varies between runs, so results will differ.
 - Quality of generated tests depends on the model; coverage is reported but not gated, and no mutation testing is done.
-- Fork PRs get no agent run (by design). Pushes by `GITHUB_TOKEN` do not trigger further workflows, so the newly pushed commit is not re-checked by `ci.yml` until the next push.
+- Fork PRs get no agent run (by design). Pushes by `GITHUB_TOKEN` do not trigger further workflows, so the commit pushed by the agent is not re-checked by `ci.yml` (the workflow itself already runs all suites; confirmed locally with typecheck).
 - `map-tests` assumes the flat `backend/tests/<basename>.test.ts` convention (same basenames in different folders collide).
 - The prompt-injection neutraliser is heuristic; the real protections are the path guard, secret scoping and tool allowlist.
 - The bootstrap PR that introduces the tooling is skipped (tooling is loaded from base).
