@@ -21,3 +21,6 @@ coverage/
 
 # macOS
 .DS_Store
+
+# PR test agent scratch space
+.agent-run/

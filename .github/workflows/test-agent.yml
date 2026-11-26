@@ -1,0 +1,203 @@
+name: Test agent
+
+# Runs on PRs from the SAME repository. Fork PRs never get secrets: the job still runs,
+# classifies the change and reports "skipped (fork)" in the job summary.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: test-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-agent:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write        # push generated tests to the PR branch (same-repo PRs only)
+      pull-requests: write   # post / update the report comment
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      TRUSTED: ${{ runner.temp }}/trusted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false   # the token is only injected in the push step
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Tooling (agent definition, skills, scripts) always comes from the BASE branch so a PR
+      # cannot rewrite the rules that govern the agent reviewing it.
+      - name: Load trusted tooling from base branch
+        id: tooling
+        run: |
+          mkdir -p "$TRUSTED"
+          if git archive "$BASE_SHA" .github/agent .claude 2>/dev/null | tar -x -C "$TRUSTED"; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decide mode (run / skip)
+        id: mode
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # only tested for presence, never printed
+        run: |
+          mkdir -p .agent-run
+          if [ "${{ steps.tooling.outputs.available }}" != "true" ]; then
+            echo "mode=skip-no-tooling" >> "$GITHUB_OUTPUT"
+            echo "reason=The agent tooling does not exist on the base branch yet (merge it first)." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node "$TRUSTED/.github/agent/cli.ts" mode --event "$GITHUB_EVENT_NAME" --base "$REPO" --head "$HEAD_REPO" > .agent-run/mode.json
+          echo "mode=$(jq -r .mode .agent-run/mode.json)" >> "$GITHUB_OUTPUT"
+          echo "reason=$(jq -r .reason .agent-run/mode.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Classify changed files
+        id: classify
+        if: steps.mode.outputs.mode == 'run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[] | {path: .filename, status: .status, previousPath: .previous_filename}' \
+            | jq -s '.' > .agent-run/changed-files.json
+          node "$TRUSTED/.github/agent/cli.ts" classify --input .agent-run/changed-files.json > .agent-run/classify.json
+          echo "tests_needed=$(jq -r .testsNeeded .agent-run/classify.json)" >> "$GITHUB_OUTPUT"
+          jq -c '.sourceFiles' .agent-run/classify.json > .agent-run/sources.json
+          node "$TRUSTED/.github/agent/cli.ts" map --root . --input .agent-run/sources.json > .agent-run/mapping.json
+          jq -n --slurpfile c .agent-run/classify.json --slurpfile m .agent-run/mapping.json \
+            '{classification: $c[0], mapping: $m[0]}' > .agent-run/plan.json
+
+      - name: Install dependencies
+        if: steps.mode.outputs.mode == 'run' && steps.classify.outputs.tests_needed == 'true'
+        run: |
+          npm --prefix backend ci
+          npm --prefix frontend ci
+
+      - name: Build prompt (PR text and diff are untrusted data)
+        if: steps.mode.outputs.mode == 'run' && steps.classify.outputs.tests_needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          gh pr diff "$PR_NUMBER" --repo "$REPO" > .agent-run/pr.diff || true
+          jq -n --arg title "$PR_TITLE" --arg body "$PR_BODY" --rawfile diff .agent-run/pr.diff \
+                --slurpfile c .agent-run/classify.json \
+            '{title: $title, body: $body, diff: $diff, changedFiles: $c[0].sourceFiles}' \
+            | node "$TRUSTED/.github/agent/cli.ts" prompt > .agent-run/prompt.txt
+          # Agent definition + skills are the trusted base-branch copies.
+          rm -rf .claude && cp -R "$TRUSTED/.claude" .claude
+          git add -A -- . > /dev/null
+          echo "PRE_TREE=$(git write-tree)" >> "$GITHUB_ENV"
+          git reset -q
+
+      - name: Run test agent
+        id: agent
+        if: steps.mode.outputs.mode == 'run' && steps.classify.outputs.tests_needed == 'true'
+        continue-on-error: true
+        # TODO(prod): pin to a full commit SHA. Verify inputs against the action's current docs.
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          prompt: |
+            Use the test-agent subagent. Read .agent-run/prompt.txt (fixed rules + UNTRUSTED PR data) and
+            .agent-run/plan.json, then follow the agent's workflow and write .agent-run/result.json.
+          claude_args: >-
+            --max-turns 40
+            --allowedTools "Read,Glob,Grep,Task,Edit(backend/tests/**),Write(backend/tests/**),Edit(frontend/src/**/*.test.ts),Edit(frontend/src/**/*.test.tsx),Write(frontend/src/**/*.test.ts),Write(frontend/src/**/*.test.tsx),Write(.agent-run/result.json),Bash(npm --prefix backend test:*),Bash(npm --prefix frontend test:*)"
+
+      # Real safeguard: independent of what the agent was told or allowed.
+      - name: Path guard (revert anything that is not a test file)
+        if: steps.mode.outputs.mode == 'run' && steps.classify.outputs.tests_needed == 'true'
+        run: bash "$TRUSTED/.github/agent/scripts/post-agent.sh" "$PRE_TREE"
+
+      - name: Run all tests (secrets are not available to this step)
+        if: steps.mode.outputs.mode == 'run'
+        run: bash "$TRUSTED/.github/agent/scripts/run-tests.sh"
+
+      - name: Build report
+        if: always()
+        env:
+          MODE: ${{ steps.mode.outputs.mode || 'skip-no-tooling' }}
+          REASON: ${{ steps.mode.outputs.reason }}
+        run: |
+          if [ ! -f "$TRUSTED/.github/agent/cli.ts" ]; then
+            echo "<!-- test-agent-report -->
+          ## Unit test agent report
+
+          Skipped: agent tooling is not available on the base branch." > .agent-run/comment.md
+          else
+            if [ "$MODE" = "run" ] && [ "${{ steps.classify.outputs.tests_needed }}" != "true" ]; then
+              REASON="No testable source changes (docs, config, types, stories or tests only)."
+            fi
+            export REASON
+            bash "$TRUSTED/.github/agent/scripts/build-report.sh"
+          fi
+          cat .agent-run/comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Commit generated tests only when everything is green and the branch is in this repo.
+      - name: Commit generated tests
+        if: steps.mode.outputs.mode == 'run' && steps.classify.outputs.tests_needed == 'true' && env.HEAD_REPO == env.REPO
+        env:
+          GH_PUSH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f .agent-run/guard.json ] || exit 0
+          mapfile -t FILES < <(jq -r '.allowed[]' .agent-run/guard.json)
+          [ "${#FILES[@]}" -gt 0 ] || { echo "agent wrote no tests"; exit 0; }
+          FAILED=0
+          for s in backend frontend; do
+            f=".agent-run/$s-vitest.json"
+            [ -f "$f" ] && [ "$(jq '(.numFailedTests // 1) + (.numFailedTestSuites // 0)' "$f")" = "0" ] || FAILED=1
+          done
+          if [ "$FAILED" = "1" ]; then
+            echo "Tests are not green: not committing. See the PR comment."; exit 0
+          fi
+          git add -- "${FILES[@]}"
+          git diff --cached --quiet && exit 0
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "test: add/update unit tests (test agent)"
+          git push "https://x-access-token:${GH_PUSH_TOKEN}@github.com/${REPO}.git" "HEAD:refs/heads/${HEAD_REF}"
+
+      - name: Post or update PR comment
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f .agent-run/comment.md ] || exit 0
+          ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+                 --jq '.[] | select(.user.type=="Bot" and (.body | contains("<!-- test-agent-report -->"))) | .id' | head -n1)
+          if [ -n "$ID" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$ID" -F body=@.agent-run/comment.md > /dev/null
+          else
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" -F body=@.agent-run/comment.md > /dev/null
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-agent-run
+          path: |
+            .agent-run/*.json
+            .agent-run/*.md
+            .agent-run/*.log
+            .agent-run/*.tsv
+          if-no-files-found: ignore
+          retention-days: 14

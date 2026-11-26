@@ -1,0 +1,10 @@
+[
+  { "path": "backend/src/todos/mappers.ts", "status": "modified" },
+  { "path": "frontend/src/hooks/useNotice.ts", "status": "modified" },
+  { "path": "frontend/src/components/NewWidget.tsx", "status": "added" },
+  { "path": "frontend/src/components/Old.tsx", "status": "removed" },
+  { "path": "frontend\\src\\lib\\renamed.ts", "status": "renamed", "previousPath": "frontend/src/lib/before.ts" },
+  { "path": "README.md", "status": "modified" },
+  { "path": "backend/package-lock.json", "status": "modified" },
+  { "path": "frontend/src/components/NewWidget.stories.tsx", "status": "added" }
+]

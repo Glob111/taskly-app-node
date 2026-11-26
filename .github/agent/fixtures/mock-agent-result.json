@@ -1,0 +1,15 @@
+{
+  "decisions": ["Added mapper edge-case tests", "Colocated NewWidget test next to component"],
+  "skills": ["vitest", "testing-library"],
+  "filesWritten": [
+    "backend/tests/mappers.test.ts",
+    "frontend/src/components/NewWidget.test.tsx",
+    "backend/src/todos/mappers.ts",
+    ".github/workflows/evil.yml"
+  ],
+  "vitest": {
+    "backend": { "numTotalTests": 2, "numPassedTests": 2, "numFailedTests": 0, "testResults": [{ "name": "backend/tests/mappers.test.ts", "status": "passed", "assertionResults": [{ "fullName": "maps a", "status": "passed" }, { "fullName": "maps b", "status": "passed" }] }] },
+    "frontend": { "numTotalTests": 2, "numPassedTests": 1, "numFailedTests": 1, "testResults": [{ "name": "frontend/src/components/NewWidget.test.tsx", "status": "failed", "assertionResults": [{ "fullName": "renders", "status": "passed" }, { "fullName": "clicks", "status": "failed", "failureMessages": ["AssertionError: expected 1 to be 2"] }] }] }
+  },
+  "coverage": { "backend": { "lines": 88.5, "statements": 87, "branches": 70, "functions": 90 } }
+}
