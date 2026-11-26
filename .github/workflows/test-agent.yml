@@ -57,7 +57,8 @@ jobs:
         id: mode
         env:
           GH_TOKEN: ${{ github.token }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # only tested for presence, never printed
+          # Either credential enables the agent. Only tested for presence, never printed.
+          AGENT_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_API_KEY }}
         run: |
           mkdir -p .agent-run
           if [ "${{ steps.tooling.outputs.available }}" != "true" ]; then
@@ -116,6 +117,8 @@ jobs:
         # TODO(prod): pin to a full commit SHA. Verify inputs against the action's current docs.
         uses: anthropics/claude-code-action@v1
         with:
+          # Provide ONE of the two secrets: a Claude subscription token or an API key.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ github.token }}
           prompt: |

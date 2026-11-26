@@ -14,14 +14,14 @@ running the suites**, and reports the result as a PR comment (updated in place) 
 | **Tests are verified independently** | After the agent, the workflow runs the full backend and frontend suites with coverage in a step that has no secrets. Results come from vitest JSON, not from the agent's claims. |
 | **Commit only when green** | Generated tests are pushed to the PR branch only if both suites pass and the PR is from the same repository. Otherwise nothing is committed and the comment says why. |
 | **Trusted tooling from the base branch** | Agent definition, skills and scripts are loaded from the PR's *base* commit, so a PR cannot rewrite the rules that govern the agent reviewing it. |
-| **Fork PRs / missing secret fail closed** | `pull_request` (not `pull_request_target`); fork PRs and runs without `ANTHROPIC_API_KEY` produce a clear "skipped" report instead of failing or exposing secrets. |
+| **Fork PRs / missing secret fail closed** | `pull_request` (not `pull_request_target`); fork PRs and runs without either secret produce a clear "skipped" report instead of failing or exposing secrets. |
 | **Untrusted input handling** | PR title/body/diff are wrapped in nonce-delimited `UNTRUSTED` blocks with lookalike delimiters neutralised; they are passed through env vars and files, never interpolated into shell. Agent output is length-bounded and escaped (no `@` mentions, no marker spoofing) before rendering. |
 
 ## 2. How to run the PR workflow, prerequisites
 
 1. Push this repository to GitHub (public) and make sure the agent files are on the **default branch**
    (tooling is read from the PR's base branch, so the very first PR that adds it is skipped with an explanatory comment).
-2. Add repository secret **`ANTHROPIC_API_KEY`** (Settings > Secrets and variables > Actions).
+2. Add ONE repository secret (Settings > Secrets and variables > Actions): **`ANTHROPIC_API_KEY`** (API billing) or **`CLAUDE_CODE_OAUTH_TOKEN`** (Claude subscription; create it with `claude setup-token`).
 3. Settings > Actions > General > Workflow permissions: allow **read and write** (needed to push tests and comment).
    If the default branch is protected, allow `github-actions[bot]` to push to PR branches (feature branches are usually fine).
 4. Open a PR from a branch **in the same repository** that changes `backend/src/**` or `frontend/src/**`.
@@ -88,7 +88,7 @@ Expected shape of the PR comment for the demo PR (e.g. a new `GET /todos/stats` 
 
 - Node 22.18+ (CI uses 24); the repo layout (`backend/tests/<name>.test.ts`, colocated frontend tests) stays as is.
 - Backend unit tests mock the database (true for the current suite), so CI needs no Postgres.
-- PRs come from branches in the same repository; maintainers add `ANTHROPIC_API_KEY`.
+- PRs come from branches in the same repository; maintainers add `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`.
 - `claude-code-action@v1` inputs (`anthropic_api_key`, `prompt`, `claude_args`) match its current documentation.
 
 ## 6. Limitations
