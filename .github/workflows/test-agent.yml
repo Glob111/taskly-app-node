@@ -28,7 +28,6 @@ jobs:
       HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      TRUSTED: ${{ runner.temp }}/trusted
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,6 +43,9 @@ jobs:
       - name: Load trusted tooling from base branch
         id: tooling
         run: |
+          # `runner` context is not available in job-level env, so TRUSTED is set here.
+          echo "TRUSTED=$RUNNER_TEMP/trusted" >> "$GITHUB_ENV"
+          TRUSTED="$RUNNER_TEMP/trusted"
           mkdir -p "$TRUSTED"
           if git archive "$BASE_SHA" .github/agent .claude 2>/dev/null | tar -x -C "$TRUSTED"; then
             echo "available=true" >> "$GITHUB_OUTPUT"
