@@ -220,6 +220,20 @@ it('prefers the mutation error over the query error and disables retry while fet
   expect(screen.getByRole('button', { name: 'Try again' })).toBeDisabled()
 })
 
+it('shows task statistics only when tasks exist', () => {
+  setup()
+  const { unmount } = render(<TodosPage />)
+  expect(
+    screen.getByRole('region', { name: 'Task statistics' }),
+  ).toHaveTextContent('1 total')
+  unmount()
+  setup({ query: { data: [] } })
+  render(<TodosPage />)
+  expect(
+    screen.queryByRole('region', { name: 'Task statistics' }),
+  ).not.toBeInTheDocument()
+})
+
 it('shows no alert without errors', () => {
   setup()
   render(<TodosPage />)
