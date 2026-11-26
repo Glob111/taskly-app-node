@@ -18,6 +18,14 @@ it('lists tasks from the repository', async () => {
   expect(response.body).toEqual([todo]);
   expect(repository.list).toHaveBeenCalledOnce();
 });
+it('serves statistics at /stats before the /:id route', async () => {
+  const { app, repository } = setup();
+  repository.list.mockResolvedValue([todo, { ...todo, id: 2, completed: true, priority: 'low' }]);
+  const response = await request(app).get('/api/todos/stats');
+  expect(response.status).toBe(200);
+  expect(response.body).toMatchObject({ total: 2, completed: 1, active: 1, by_priority: { low: 1, medium: 0, high: 1 } });
+  expect(repository.get).not.toHaveBeenCalled();
+});
 it('creates tasks with trimmed input and defaults', async () => {
   const { app, repository } = setup();
   const response = await request(app).post('/api/todos').send({ title: '  Plan the sprint  ', priority: 'high' });

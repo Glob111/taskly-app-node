@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { TodoStore } from './types.js';
+import { computeStats } from './stats.js';
 import { createSchema, updateSchema, idSchema } from './validators.js';
 
 export function createTodosRouter(repository: TodoStore) {
@@ -11,6 +12,8 @@ export function createTodosRouter(repository: TodoStore) {
     next();
   });
   router.get('/', async (req, res) => res.json(await repository.list()));
+  // Must be registered before '/:id' so that 'stats' is not treated as an id.
+  router.get('/stats', async (req, res) => res.json(computeStats(await repository.list())));
   router.post('/', async (req, res) => {
     const result = createSchema.safeParse(req.body);
     if (!result.success) return res.status(422).json({ detail: result.error.issues });
